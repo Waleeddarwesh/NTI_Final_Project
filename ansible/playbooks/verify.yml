@@ -1,0 +1,71 @@
+---
+# playbooks/verify.yml
+# Run after site.yml to confirm every tool is installed and reachable.
+# Makes no changes — safe to run at any time.
+#
+#   ansible-playbook playbooks/verify.yml
+
+- name: Verify Jenkins host tool installations
+  hosts: jenkins
+  become: false
+  gather_facts: true
+
+  tasks:
+    - name: Check Java version
+      ansible.builtin.command: java -version
+      register: java_ver
+      changed_when: false
+
+    - name: Check Git version
+      ansible.builtin.command: git --version
+      register: git_ver
+      changed_when: false
+
+    - name: Check Docker version
+      ansible.builtin.command: docker --version
+      register: docker_ver
+      changed_when: false
+      become: true
+
+    - name: Check AWS CLI version
+      ansible.builtin.command: aws --version
+      register: awscli_ver
+      changed_when: false
+
+    - name: Check kubectl version
+      ansible.builtin.command: kubectl version --client
+      register: kubectl_ver
+      changed_when: false
+
+    - name: Check Helm version
+      ansible.builtin.command: helm version --short
+      register: helm_ver
+      changed_when: false
+
+    - name: Check Jenkins service status
+      ansible.builtin.systemd:
+        name: jenkins
+      register: jenkins_svc
+      become: true
+
+    - name: Check CloudWatch Agent status
+      ansible.builtin.systemd:
+        name: amazon-cloudwatch-agent
+      register: cw_svc
+      become: true
+
+    - name: Print verification summary
+      ansible.builtin.debug:
+        msg: |
+          ── Tool Versions ─────────────────────────────────────────
+          Java:    {{ java_ver.stderr | default(java_ver.stdout) | trim }}
+          Git:     {{ git_ver.stdout | trim }}
+          Docker:  {{ docker_ver.stdout | trim }}
+          AWS CLI: {{ awscli_ver.stdout | trim }}
+          kubectl: {{ kubectl_ver.stdout | trim }}
+          Helm:    {{ helm_ver.stdout | trim }}
+
+          ── Service Status ────────────────────────────────────────
+          Jenkins:          {{ jenkins_svc.status.ActiveState }}
+          CloudWatch Agent: {{ cw_svc.status.ActiveState }}
+          ──────────────────────────────────────────────────────────

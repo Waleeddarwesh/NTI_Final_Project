@@ -1,0 +1,73 @@
+# ============================================================================
+# NTI DevOps Final Project — .gitignore
+# ============================================================================
+
+# ─── Terraform ──────────────────────────────────────────────────────────────
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
+tfplan
+
+# ─── Ansible ────────────────────────────────────────────────────────────────
+*.retry
+
+# ─── Docker ─────────────────────────────────────────────────────────────────
+docker/.env
+
+# ─── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ─── IDE / Editor ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+Desktop.ini
+Thumbs.db
+ehthumbs.db
+
+# ─── Secrets & Credentials ─────────────────────────────────────────────────
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+
+# ─── Logs ───────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Misc ───────────────────────────────────────────────────────────────────
+.claude/
+Implementation_Plan.txt

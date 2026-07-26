@@ -1,0 +1,54 @@
+# helm/values-production.yaml
+# Production overrides — apply on top of values.yaml:
+#   helm upgrade myapp ./helm/myapp \
+#     -f helm/values-production.yaml \
+#     --set image.tag=$GIT_SHA \
+#     --set image.repository=$ECR_REPO \
+#     -n nti-devops
+
+global:
+  environment: production
+
+replicaCount: 3
+
+autoscaling:
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60    # scale earlier under sustained load
+
+resources:
+  app:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  redis:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+config:
+  debug: "False"
+  logLevel: WARNING
+  gunicornWorkers: "8"
+
+ingress:
+  scheme: internet-facing
+  # certificateArn: arn:aws:acm:us-east-1:ACCOUNT:certificate/UUID
+  hosts:
+    - host: app.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+resourceQuota:
+  requestsCpu: "12"
+  requestsMemory: 24Gi
+  limitsCpu: "24"
+  limitsMemory: 48Gi
+  pods: "40"

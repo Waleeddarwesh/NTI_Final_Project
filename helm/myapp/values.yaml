@@ -1,0 +1,152 @@
+# helm/myapp/values.yaml
+# Default values for the nti-devops application Helm chart.
+# Override per-environment with:
+#   helm upgrade myapp ./helm/myapp -f helm/values-production.yaml
+# Or per-key with --set image.tag=abc123
+
+# ── Global ────────────────────────────────────────────────────────────────────
+global:
+  projectName: nti-devops
+  environment: dev
+
+# ── Application image ─────────────────────────────────────────────────────────
+image:
+  # Repository is updated by the Jenkinsfile at deploy time:
+  #   helm upgrade ... --set image.repository=<ecr-url> --set image.tag=<sha>
+  repository: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/nti-devops/app
+  tag: latest
+  pullPolicy: Always
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+replicaCount: 2
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# ── Resources ─────────────────────────────────────────────────────────────────
+resources:
+  app:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  redis:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ── HorizontalPodAutoscaler ───────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ── Service ───────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+# ── Ingress ───────────────────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: alb
+  scheme: internet-facing
+  targetType: ip
+  healthCheckPath: /health/
+  # ALB access logs bucket — must match s3 module output from Phase 1
+  # Replace ACCOUNT_ID and REGION before deploying.
+  accessLogsBucket: nti-devops-dev-alb-logs-ACCOUNT_ID-REGION
+  # certificateArn: ""   # Uncomment and fill for HTTPS
+  annotations: {}
+  hosts:
+    - host: ""           # Leave empty to use ALB-assigned DNS; set to custom domain if using Route53
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ── Application configuration (non-secret) ────────────────────────────────────
+config:
+  djangoSettingsModule: config.settings.production
+  debug: "False"
+  allowedHosts: "*"
+  logLevel: INFO
+  awsRegion: us-east-1
+  redisHost: redis
+  redisPort: "6379"
+  dbPort: "5432"
+  dbName: appdb
+  dbUser: appuser
+  gunicornWorkers: "4"
+  gunicornThreads: "2"
+  gunicornTimeout: "120"
+
+# ── Secret values (injected by Jenkinsfile from Secrets Manager) ──────────────
+# These are placeholder values — the Jenkinsfile creates the real Secret
+# before running helm upgrade. Do NOT set real values here.
+secret:
+  secretKey: ""
+  databaseUrl: ""
+  redisUrl: ""
+  dbPassword: ""
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+redis:
+  enabled: true
+  maxmemory: 256mb
+  maxmemoryPolicy: allkeys-lru
+
+# ── NetworkPolicy ─────────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: true
+
+# ── Resource quotas ───────────────────────────────────────────────────────────
+resourceQuota:
+  enabled: true
+  requestsCpu: "4"
+  requestsMemory: 8Gi
+  limitsCpu: "8"
+  limitsMemory: 16Gi
+  pods: "20"
+
+# ── Security context ─────────────────────────────────────────────────────────
+securityContext:
+  app:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  redis:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+
+# ── Probes ────────────────────────────────────────────────────────────────────
+probes:
+  startup:
+    failureThreshold: 18
+    periodSeconds: 10
+  liveness:
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# ── Namespace ─────────────────────────────────────────────────────────────────
+namespace:
+  create: true
+  name: nti-devops

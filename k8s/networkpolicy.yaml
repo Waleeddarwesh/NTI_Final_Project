@@ -1,0 +1,134 @@
+---
+# k8s/networkpolicy.yaml
+# NetworkPolicy manifests using standard Kubernetes API (not Calico-specific).
+# Requires network policy support enabled on the EKS cluster — the AWS VPC
+# CNI supports NetworkPolicy from EKS 1.25+ when configured with
+# ENABLE_NETWORK_POLICY=true in the aws-node DaemonSet or via the EKS
+# add-on console.
+#
+# Strategy: default-deny everything in the namespace, then explicitly
+# allow only the traffic paths the application actually needs.
+
+# ── Default deny all ingress and egress ───────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: nti-devops
+spec:
+  podSelector: {}    # empty selector = applies to ALL pods in namespace
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ── Allow app → redis (port 6379) ────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-redis
+  namespace: nti-devops
+spec:
+  podSelector:
+    matchLabels:
+      component: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: app
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# ── Allow ingress controller → app (port 8000) ───────────────────────────────
+# The AWS ALB controller routes traffic to pods directly (IP target mode).
+# The traffic arrives from the VPC CIDR, not from a pod — so we allow
+# ingress on port 8000 from anywhere within the cluster (namespaceSelector: {})
+# which covers the ALB → pod path without opening it to the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-app
+  namespace: nti-devops
+spec:
+  podSelector:
+    matchLabels:
+      component: app
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8000
+
+---
+# ── Allow app → external (RDS on port 5432, AWS APIs on 443) ─────────────────
+# App pods need to reach RDS (in private subnets, not in the cluster) and
+# AWS APIs (Secrets Manager, S3, CloudWatch). These are outside the cluster
+# so we allow egress to any external IP on those ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-egress
+  namespace: nti-devops
+spec:
+  podSelector:
+    matchLabels:
+      component: app
+  policyTypes:
+    - Egress
+  egress:
+    # RDS PostgreSQL
+    - ports:
+        - protocol: TCP
+          port: 5432
+    # AWS service endpoints (Secrets Manager, S3, CloudWatch, ECR)
+    - ports:
+        - protocol: TCP
+          port: 443
+    # Redis inside the cluster
+    - to:
+        - podSelector:
+            matchLabels:
+              component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # DNS resolution (CoreDNS in kube-system)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# ── Allow redis egress (DNS only — redis doesn't call external services) ──────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-egress
+  namespace: nti-devops
+spec:
+  podSelector:
+    matchLabels:
+      component: redis
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

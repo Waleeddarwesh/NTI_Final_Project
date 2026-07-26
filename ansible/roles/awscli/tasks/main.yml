@@ -1,0 +1,84 @@
+---
+# roles/awscli/tasks/main.yml
+# Install AWS CLI v2. Uses the official zip installer rather than a package
+# manager since AWS CLI v2 isn't in AL2023's default repos, and the zip
+# approach is idempotent with the `update` flag.
+
+- name: Install unzip (required to extract AWS CLI installer)
+  ansible.builtin.dnf:
+    name: unzip
+    state: present
+  tags: awscli
+
+- name: Check if AWS CLI v2 is already installed
+  ansible.builtin.command: aws --version
+  register: awscli_installed
+  changed_when: false
+  failed_when: false
+  tags: awscli
+
+- name: Download AWS CLI v2 installer
+  ansible.builtin.get_url:
+    url: "{{ awscli_url }}"
+    dest: /tmp/awscliv2.zip
+    mode: '0644'
+  when: awscli_installed.rc != 0
+  tags: awscli
+
+- name: Extract AWS CLI v2 installer
+  ansible.builtin.unarchive:
+    src: /tmp/awscliv2.zip
+    dest: /tmp/
+    remote_src: true
+  when: awscli_installed.rc != 0
+  tags: awscli
+
+- name: Install AWS CLI v2
+  ansible.builtin.command: /tmp/aws/install --update
+  args:
+    creates: /usr/local/bin/aws
+  tags: awscli
+
+- name: Clean up installer files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/awscliv2.zip
+    - /tmp/aws
+  tags: awscli
+
+- name: Verify AWS CLI version
+  ansible.builtin.command: aws --version
+  register: awscli_version
+  changed_when: false
+  tags: awscli
+
+- name: Display AWS CLI version
+  ansible.builtin.debug:
+    msg: "{{ awscli_version.stdout }}"
+  tags: awscli
+
+- name: Configure AWS CLI default region for jenkins user
+  ansible.builtin.ini_file:
+    path: "{{ jenkins_home }}/.aws/config"
+    section: default
+    option: region
+    value: "{{ aws_region }}"
+    create: true
+    mode: '0600'
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+  tags: awscli
+
+- name: Configure AWS CLI default output for jenkins user
+  ansible.builtin.ini_file:
+    path: "{{ jenkins_home }}/.aws/config"
+    section: default
+    option: output
+    value: json
+    create: true
+    mode: '0600'
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+  tags: awscli

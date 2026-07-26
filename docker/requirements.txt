@@ -1,0 +1,36 @@
+# requirements.txt
+# Pinned to major.minor so patch updates are auto-applied in rebuilds
+# without introducing surprise breaking changes from major bumps.
+
+# Framework
+Django==5.2.*                        # LTS, supported until April 2028
+
+# Database
+psycopg[binary]==3.*                 # PostgreSQL driver (psycopg3, asyncio-ready)
+dj-database-url==2.*                 # Parse DATABASE_URL env var
+
+# Cache / task queue
+redis==5.*
+django-redis==5.*
+
+# Application server
+gunicorn==23.*
+
+# Static files
+whitenoise==6.*                      # Serve static files from Gunicorn (no separate container needed in dev)
+
+# AWS integration
+boto3==1.*                           # For reading Secrets Manager, S3 uploads, etc.
+django-storages[s3]==1.*            # S3-backed media storage
+
+# Security & utilities
+python-decouple==3.*                 # Read settings from .env / environment
+django-cors-headers==4.*
+django-health-check==3.*            # /health/ endpoint consumed by K8s readiness probes
+
+# Observability
+sentry-sdk[django]==2.*             # Error tracking (optional but standard)
+
+# Dev/test only (excluded from production image via build arg)
+# These are kept here for reference — the Dockerfile separates them
+# using a dev-requirements.txt pattern

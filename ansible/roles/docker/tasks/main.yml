@@ -1,0 +1,74 @@
+---
+# roles/docker/tasks/main.yml
+# Install Docker CE on Amazon Linux 2023.
+# AL2023 uses dnf and does not ship with Docker in its default repos —
+# we use the official Docker CE repo for AL2 which also works on AL2023.
+
+- name: Install dnf-plugins-core (needed to add Docker repo)
+  ansible.builtin.dnf:
+    name: dnf-plugins-core
+    state: present
+  tags: docker
+
+- name: Add Docker CE repository
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/rhel/docker-ce.repo
+    dest: /etc/yum.repos.d/docker-ce.repo
+    mode: '0644'
+  tags: docker
+
+- name: Install Docker CE packages
+  ansible.builtin.dnf:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+  tags: docker
+
+- name: Enable and start Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: docker
+
+- name: Add users to docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_users }}"
+  tags: docker
+
+- name: Verify Docker daemon is running
+  ansible.builtin.command: docker info
+  register: docker_info
+  changed_when: false
+  failed_when: docker_info.rc != 0
+  tags: docker
+
+- name: Configure Docker daemon options
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "100m",
+          "max-file": "3"
+        },
+        "default-ulimits": {
+          "nofile": {
+            "Hard": 64000,
+            "Name": "nofile",
+            "Soft": 64000
+          }
+        }
+      }
+    mode: '0644'
+  notify: Restart Docker
+  tags: docker

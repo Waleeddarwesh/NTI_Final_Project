@@ -1,0 +1,83 @@
+---
+# k8s/ingress.yaml
+# Ingress for the AWS Load Balancer Controller (installed in Phase 5 via Helm).
+# This manifest will remain in Pending state until the controller is running.
+#
+# Prerequisites before applying:
+#   1. AWS Load Balancer Controller installed (Phase 5 - Helm)
+#   2. Public subnets tagged: kubernetes.io/role/elb = 1
+#      (already done by the VPC module in Phase 1)
+#   3. ALB logs S3 bucket exists (Phase 1 - S3 module)
+#
+# After the controller is installed, get the ALB DNS name:
+#   kubectl get ingress nti-devops-ingress -n nti-devops
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nti-devops-ingress
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: ingress
+  annotations:
+    # ── Controller selection ─────────────────────────────────────────────────
+    kubernetes.io/ingress.class: alb
+
+    # ── ALB placement ────────────────────────────────────────────────────────
+    # internet-facing: reachable from the internet via the public subnets
+    # internal: reachable only within the VPC (useful for internal APIs)
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # Target pods directly by IP rather than routing through NodePort
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # ── Subnets ──────────────────────────────────────────────────────────────
+    # Auto-discovered from the kubernetes.io/role/elb=1 tag set on public
+    # subnets by the VPC module (Phase 1). Explicit subnet IDs can override:
+    # alb.ingress.kubernetes.io/subnets: subnet-aaaa,subnet-bbbb
+
+    # ── Protocol & port ──────────────────────────────────────────────────────
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # Uncomment and add certificate ARN for HTTPS (recommended for production):
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT:certificate/UUID
+    # alb.ingress.kubernetes.io/ssl-redirect: "443"
+
+    # ── Health check ─────────────────────────────────────────────────────────
+    alb.ingress.kubernetes.io/healthcheck-path: /health/
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "10"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+
+    # ── Access logs ──────────────────────────────────────────────────────────
+    # S3 bucket created by the s3 module in Phase 1.
+    # Replace ACCOUNT_ID and REGION with actual values.
+    alb.ingress.kubernetes.io/load-balancer-attributes: >-
+      access_logs.s3.enabled=true,
+      access_logs.s3.bucket=nti-devops-dev-alb-logs-ACCOUNT_ID-REGION,
+      access_logs.s3.prefix=alb-logs
+
+    # ── Security ─────────────────────────────────────────────────────────────
+    alb.ingress.kubernetes.io/security-groups: ""
+    # Uncomment and set to restrict which IPs can reach the ALB:
+    # alb.ingress.kubernetes.io/inbound-cidrs: 0.0.0.0/0
+
+    # ── Tags propagated to the ALB ───────────────────────────────────────────
+    alb.ingress.kubernetes.io/tags: >-
+      Project=nti-devops,
+      Environment=dev,
+      ManagedBy=kubernetes
+
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nti-devops-app
+                port:
+                  number: 80

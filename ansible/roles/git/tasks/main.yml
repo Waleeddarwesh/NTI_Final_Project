@@ -1,0 +1,29 @@
+---
+# roles/git/tasks/main.yml
+# AL2023 ships git in its default repos — a simple dnf install is all that's needed.
+
+- name: Install git
+  ansible.builtin.dnf:
+    name: git
+    state: present
+  tags: git
+
+- name: Verify git version
+  ansible.builtin.command: git --version
+  register: git_version_output
+  changed_when: false
+  tags: git
+
+- name: Display git version
+  ansible.builtin.debug:
+    msg: "{{ git_version_output.stdout }}"
+  tags: git
+
+- name: Configure git safe directory for jenkins user
+  # Prevents "dubious ownership" errors when Jenkins checks out repos as the
+  # jenkins user into workspace directories owned by a different UID.
+  ansible.builtin.command: git config --global --add safe.directory '*'
+  become: true
+  become_user: "{{ jenkins_user }}"
+  changed_when: false
+  tags: git

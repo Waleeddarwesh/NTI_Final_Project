@@ -1,0 +1,4 @@
+---
+docker_users:
+  - ec2-user
+  - jenkins   # jenkins user needs docker group to run builds without sudo

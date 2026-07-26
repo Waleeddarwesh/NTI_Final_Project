@@ -1,0 +1,37 @@
+---
+# k8s/configmap.yaml
+# Non-secret application configuration.
+# Secret values (DATABASE_URL, SECRET_KEY, REDIS_URL) live in secret.yaml,
+# not here — ConfigMaps are stored unencrypted in etcd.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nti-devops-config
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: config
+data:
+  # Django
+  DJANGO_SETTINGS_MODULE: "config.settings.production"
+  DEBUG: "False"
+  ALLOWED_HOSTS: "*"           # Restrict to actual domain after ALB DNS is known
+  DJANGO_LOG_LEVEL: "INFO"
+
+  # AWS
+  AWS_REGION: "us-east-1"
+
+  # Redis connection (non-secret host/port; password if any goes in secret.yaml)
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+
+  # Database port (host comes from RDS endpoint secret, password from credentials secret)
+  DB_PORT: "5432"
+  DB_NAME: "appdb"
+  DB_USER: "appuser"
+
+  # Gunicorn tuning (can be overridden per-environment without rebuilding the image)
+  GUNICORN_WORKERS: "4"
+  GUNICORN_THREADS: "2"
+  GUNICORN_TIMEOUT: "120"

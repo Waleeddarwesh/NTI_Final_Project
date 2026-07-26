@@ -1,0 +1,54 @@
+---
+# k8s/namespace.yaml
+# Dedicated namespace for the nti-devops application.
+# All Phase 4 resources are deployed into this namespace.
+# Apply first: kubectl apply -f k8s/namespace.yaml
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nti-devops
+  labels:
+    project: nti-devops
+    environment: dev
+    managed-by: terraform-eks
+
+---
+# ResourceQuota prevents a runaway pod or misconfig from consuming all
+# cluster resources and starving other workloads.
+# Values are deliberately modest for a 2-node t3.medium cluster.
+# Scale up when node group is expanded (Phase 1 eks_node_max_size).
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nti-devops-quota
+  namespace: nti-devops
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "20"
+    persistentvolumeclaims: "5"
+
+---
+# LimitRange sets per-container defaults so pods without explicit
+# requests/limits still get sensible resource accounting.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: nti-devops-limits
+  namespace: nti-devops
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "2"
+        memory: 4Gi

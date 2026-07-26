@@ -1,0 +1,61 @@
+---
+# k8s/horizontalpodautoscaler.yaml
+# HorizontalPodAutoscaler for the Django/Gunicorn app Deployment.
+# Scales between 2 and 6 replicas based on CPU and memory utilization.
+#
+# Prerequisite: metrics-server must be running in the cluster.
+# metrics-server is installed in Phase 5 (Helm).
+# The HPA object can be applied now but will report "unknown" metrics
+# until metrics-server is available — that is expected and harmless.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nti-devops-app-hpa
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nti-devops-app
+
+  minReplicas: 2    # matches deployment.yaml replicas — never scale below 2
+  maxReplicas: 6    # bounded by ResourceQuota (max 20 pods) and node capacity
+
+  metrics:
+    # Scale up when average CPU across all app pods exceeds 70%
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Scale up when average memory exceeds 80% — helps catch memory leaks
+    # before they cause OOMKilled events.
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+  behavior:
+    # Scale up quickly (traffic spikes should be handled fast)
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+
+    # Scale down slowly (avoid flapping during brief traffic dips)
+    scaleDown:
+      stabilizationWindowSeconds: 300     # 5 minutes before scaling down
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

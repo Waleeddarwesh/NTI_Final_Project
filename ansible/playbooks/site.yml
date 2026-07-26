@@ -1,0 +1,109 @@
+---
+# playbooks/site.yml
+# Master playbook — provisions the Jenkins host from scratch.
+# Run from the ansible/ directory:
+#
+#   ansible-playbook playbooks/site.yml
+#
+# Or with a tag to run just one role (e.g. after a plugin change):
+#
+#   ansible-playbook playbooks/site.yml --tags jenkins,plugins
+#
+# Or with --check for a dry-run:
+#
+#   ansible-playbook playbooks/site.yml --check
+#
+# Role execution order is intentional:
+#   1. java      — Jenkins 2.555.x requires Java 21; must be first
+#   2. git       — needed before docker/jenkins for checkout operations
+#   3. docker    — must be before jenkins (jenkins user added to docker group)
+#   4. awscli    — must be before kubectl (eks update-kubeconfig needs aws cli)
+#   5. kubectl   — must be after awscli, after jenkins user exists
+#   6. helm      — independent but logically grouped with kubectl
+#   7. jenkins   — depends on java, git, docker being present
+#   8. cloudwatch — last; reads jenkins log paths that only exist after jenkins runs
+
+- name: Configure Jenkins host
+  hosts: jenkins
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for bootstrap to complete
+      # Terraform's user-data writes this marker file when cloud-init finishes.
+      # Ansible running too early (e.g. immediately after terraform apply while
+      # cloud-init is still running) causes flaky failures in dnf tasks.
+      ansible.builtin.wait_for:
+        path: /etc/nti-devops/bootstrap-complete
+        state: present
+        timeout: 300
+      tags: always
+
+    - name: Load environment variables from Terraform bootstrap env file
+      ansible.builtin.slurp:
+        src: /etc/nti-devops/env
+      register: terraform_env_raw
+      tags: always
+
+    - name: Parse EKS cluster name from env file
+      ansible.builtin.set_fact:
+        eks_cluster_name: >-
+          {{ (terraform_env_raw.content | b64decode)
+             | regex_search('EKS_CLUSTER_NAME=(.+)', '\\1')
+             | first | trim }}
+        aws_region: >-
+          {{ (terraform_env_raw.content | b64decode)
+             | regex_search('AWS_REGION=(.+)', '\\1')
+             | first | trim }}
+      tags: always
+
+    - name: Update all existing packages before role installation
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+        update_cache: true
+      tags: always
+
+  roles:
+    - role: java
+      tags: java
+
+    - role: git
+      tags: git
+
+    - role: docker
+      tags: docker
+
+    - role: awscli
+      tags: awscli
+
+    - role: kubectl
+      tags: kubectl
+
+    - role: helm
+      tags: helm
+
+    - role: jenkins
+      tags: jenkins
+
+    - role: cloudwatch
+      tags: cloudwatch
+
+  post_tasks:
+    - name: Print provisioning summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          Jenkins host provisioning complete.
+
+          Jenkins URL : http://{{ ansible_host }}:8080
+          SSM session : aws ssm start-session --target {{ ansible_host }}
+          SSH session : ssh ec2-user@{{ ansible_host }}
+
+          Next steps:
+            1. Open the Jenkins URL and complete initial setup
+            2. Run: terraform -chdir=../terraform output eks_kubeconfig_command
+               and verify kubectl can reach the cluster from this host
+            3. Proceed to Phase 3 (Docker) and Phase 4 (Kubernetes)
+          ============================================================
+      tags: always

@@ -1,0 +1,483 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Jenkinsfile — NTI DevOps Final Project
+// Production CI/CD pipeline for the Django/Gunicorn application.
+//
+// Pipeline flow:
+//   Checkout → Unit Tests → SonarQube Analysis → Quality Gate →
+//   Docker Build → Trivy Scan → Push to ECR → Secrets Injection →
+//   Helm Upgrade → Deployment Verification
+//
+// Branch strategy:
+//   • All branches : Checkout, Test, SonarQube, Build, Trivy
+//   • main only    : Push ECR, Inject Secrets, Helm Deploy, Verify
+//
+// Prerequisites (configured in Jenkins UI before first run):
+//   1. Credentials:
+//      - sonarqube-token        : Secret text, SonarQube user token
+//      - aws-credentials-id     : AWS credentials (or leave empty — the Jenkins
+//                                 EC2 role from Phase 1/2 handles auth via IMDS)
+//   2. SonarQube server configured in:
+//      Manage Jenkins → Configure System → SonarQube servers
+//      Name: "SonarQube" (must match SONAR_SERVER below)
+//   3. SonarQube webhook pointing back at Jenkins:
+//      SonarQube → Administration → Webhooks → Create
+//      URL: http://<JENKINS_IP>:8080/sonarqube-webhook/
+//   4. Trivy installed on the Jenkins host (done by this pipeline on first run
+//      if not present — see the "Install Trivy if needed" step)
+// ─────────────────────────────────────────────────────────────────────────────
+
+pipeline {
+    agent any
+
+    // ── Environment variables ─────────────────────────────────────────────────
+    environment {
+        // Project identity — must match Phase 1 terraform.tfvars
+        PROJECT_NAME       = 'nti-devops'
+        ENVIRONMENT        = 'dev'
+        AWS_REGION         = 'us-east-1'
+
+        // AWS account ID — resolved at runtime so the pipeline works across accounts
+        AWS_ACCOUNT_ID     = sh(script: 'aws sts get-caller-identity --query Account --output text', returnStdout: true).trim()
+
+        // ECR — repository URL assembled from account ID at runtime
+        ECR_REGISTRY       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        ECR_REPO           = "${ECR_REGISTRY}/${PROJECT_NAME}/app"
+        IMAGE_TAG          = "${BUILD_NUMBER}-${GIT_COMMIT.take(8)}"
+        IMAGE_FULL         = "${ECR_REPO}:${IMAGE_TAG}"
+
+        // EKS
+        EKS_CLUSTER        = "${PROJECT_NAME}-${ENVIRONMENT}-eks"
+        K8S_NAMESPACE      = "${PROJECT_NAME}"
+        HELM_RELEASE       = 'myapp'
+        HELM_CHART         = './helm/myapp'
+        HELM_TIMEOUT       = '300s'
+
+        // SonarQube — must match the server name configured in Jenkins
+        SONAR_SERVER       = 'SonarQube'
+        SONAR_PROJECT_KEY  = "${PROJECT_NAME}"
+
+        // Trivy
+        TRIVY_VERSION      = '0.70.0'
+        TRIVY_SEVERITY     = 'HIGH,CRITICAL'
+        TRIVY_EXIT_CODE    = '1'          // 1 = fail on findings; 0 = report only
+
+        // Secrets Manager secret names (from Phase 1/5 outputs)
+        SM_CREDENTIALS     = "${PROJECT_NAME}-${ENVIRONMENT}-db-credentials"
+        SM_ENDPOINT        = "${PROJECT_NAME}-${ENVIRONMENT}-rds-endpoint"
+
+        // Deployment verification timeout (seconds)
+        DEPLOY_TIMEOUT     = '300'
+    }
+
+    // ── Options ───────────────────────────────────────────────────────────────
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '5'))
+        timeout(time: 45, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+        disableConcurrentBuilds(abortPrevious: true)
+    }
+
+    // ── Trigger ───────────────────────────────────────────────────────────────
+    triggers {
+        // GitHub webhook push trigger.
+        // Configure GitHub repository → Settings → Webhooks:
+        //   Payload URL: http://<JENKINS_IP>:8080/github-webhook/
+        //   Content type: application/json
+        //   Events: Just the push event
+        githubPush()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    stages {
+
+        // ── Stage 1: Checkout ─────────────────────────────────────────────────
+        stage('Checkout') {
+            steps {
+                cleanWs()
+                checkout scm
+
+                script {
+                    // Make GIT_COMMIT available as a short hash for image tagging
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+                    env.IMAGE_TAG = "${BUILD_NUMBER}-${env.GIT_COMMIT_SHORT}"
+                    env.IMAGE_FULL = "${ECR_REPO}:${env.IMAGE_TAG}"
+
+                    echo "Branch  : ${env.BRANCH_NAME}"
+                    echo "Commit  : ${env.GIT_COMMIT_SHORT}"
+                    echo "Image   : ${env.IMAGE_FULL}"
+                }
+            }
+        }
+
+        // ── Stage 2: Unit Tests ───────────────────────────────────────────────
+        stage('Unit Tests') {
+            steps {
+                sh '''
+                    # Run tests inside a fresh Docker Compose stack so tests have
+                    # a real PostgreSQL and Redis available, matching the production
+                    # service topology as closely as possible.
+                    #
+                    # The app service runs Django's test runner; Postgres and Redis
+                    # are health-checked before tests begin (via entrypoint.sh wait
+                    # logic and compose depends_on conditions).
+
+                    docker compose -f docker-compose.yml \
+                        -f docker-compose.test.yml \
+                        run --rm \
+                        -e DJANGO_SETTINGS_MODULE=config.settings.test \
+                        app \
+                        python manage.py test \
+                            --verbosity=2 \
+                            --failfast \
+                            --no-input \
+                            2>&1 | tee test-output.txt
+
+                    # Always tear down the test stack so containers don't accumulate
+                    docker compose -f docker-compose.yml \
+                        -f docker-compose.test.yml \
+                        down -v --remove-orphans
+                '''
+            }
+            post {
+                always {
+                    // Archive test output; junit() would be used if tests
+                    // produce JUnit XML (django-unittest-xml-reporting)
+                    archiveArtifacts artifacts: 'test-output.txt', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // ── Stage 3: SonarQube Analysis ───────────────────────────────────────
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv("${SONAR_SERVER}") {
+                    sh '''
+                        sonar-scanner \
+                            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                            -Dsonar.projectName="${PROJECT_NAME}" \
+                            -Dsonar.projectVersion=${IMAGE_TAG} \
+                            -Dsonar.sources=. \
+                            -Dsonar.exclusions=**/migrations/**,**/__pycache__/**,**/tests/**,**/staticfiles/**,**/node_modules/**,helm/**,terraform/**,ansible/**,k8s/** \
+                            -Dsonar.python.version=3.13 \
+                            -Dsonar.python.coverage.reportPaths=coverage.xml
+                    '''
+                }
+            }
+        }
+
+        // ── Stage 4: Quality Gate ─────────────────────────────────────────────
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    // Blocks until SonarQube webhook fires back with the result.
+                    // If the webhook is not configured in SonarQube (see
+                    // prerequisites at the top), this will time out after 5
+                    // minutes rather than hang indefinitely.
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        // ── Stage 5: Docker Build ─────────────────────────────────────────────
+        stage('Docker Build') {
+            steps {
+                sh '''
+                    docker build \
+                        --target runtime \
+                        --tag "${IMAGE_FULL}" \
+                        --tag "${ECR_REPO}:latest" \
+                        --build-arg BUILDKIT_INLINE_CACHE=1 \
+                        --cache-from "${ECR_REPO}:latest" \
+                        --label "build.number=${BUILD_NUMBER}" \
+                        --label "git.commit=${GIT_COMMIT_SHORT}" \
+                        --label "git.branch=${BRANCH_NAME}" \
+                        --label "build.timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                        -f docker/Dockerfile \
+                        docker/
+                '''
+            }
+        }
+
+        // ── Stage 6: Trivy Security Scan ──────────────────────────────────────
+        stage('Trivy Scan') {
+            steps {
+                sh '''
+                    # Install Trivy via direct binary download if not already present.
+                    # Using direct download (not the package repo) to avoid the
+                    # rotated GPG key issue from the April 2026 Aqua security incident
+                    # (v0.70.0 release notes). The package repo keys were rotated;
+                    # the binary download is unaffected.
+                    if ! command -v trivy &>/dev/null; then
+                        echo "Installing Trivy ${TRIVY_VERSION}..."
+                        curl -sSfL \
+                            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+                            -o /tmp/trivy.tar.gz
+                        tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+                        sudo mv /tmp/trivy /usr/local/bin/trivy
+                        sudo chmod +x /usr/local/bin/trivy
+                        rm -f /tmp/trivy.tar.gz
+                    fi
+
+                    echo "Trivy version: $(trivy --version)"
+
+                    # Update vulnerability database before scanning
+                    trivy image --download-db-only --quiet
+
+                    # Scan the built image.
+                    # --ignore-unfixed : skip vulnerabilities with no fix available
+                    #   (keeps the signal-to-noise ratio high; unfixed CVEs can be
+                    #   accepted and tracked via .trivyignore)
+                    # --exit-code 1    : fail the build on findings at TRIVY_SEVERITY
+                    # --format table   : human-readable output in the build log
+                    # --output         : also write JSON for archiving/auditing
+                    trivy image \
+                        --severity "${TRIVY_SEVERITY}" \
+                        --ignore-unfixed \
+                        --exit-code "${TRIVY_EXIT_CODE}" \
+                        --format table \
+                        "${IMAGE_FULL}"
+
+                    # Write JSON report for archiving regardless of exit code
+                    trivy image \
+                        --severity "${TRIVY_SEVERITY}" \
+                        --ignore-unfixed \
+                        --exit-code 0 \
+                        --format json \
+                        --output trivy-report.json \
+                        "${IMAGE_FULL}"
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        // ── Stage 7: Push to ECR ──────────────────────────────────────────────
+        // Deploy stages only run on the main branch
+        stage('Push to ECR') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                    # Authenticate Docker to ECR using the Jenkins instance role
+                    # (no static credentials needed — the IAM role from Phase 1/2
+                    # grants ecr:GetAuthorizationToken and ecr:PushPull).
+                    aws ecr get-login-password \
+                        --region "${AWS_REGION}" \
+                    | docker login \
+                        --username AWS \
+                        --password-stdin \
+                        "${ECR_REGISTRY}"
+
+                    # Push both the versioned tag and latest
+                    docker push "${IMAGE_FULL}"
+                    docker push "${ECR_REPO}:latest"
+
+                    echo "Pushed: ${IMAGE_FULL}"
+                '''
+            }
+        }
+
+        // ── Stage 8: Inject Secrets into Kubernetes ───────────────────────────
+        stage('Inject Secrets') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                    # Refresh kubectl context against the EKS cluster.
+                    # The Jenkins instance role (Phase 1/2 IAM + Phase 3 EKS
+                    # access entry) has cluster-admin access.
+                    aws eks update-kubeconfig \
+                        --name "${EKS_CLUSTER}" \
+                        --region "${AWS_REGION}"
+
+                    # Read credentials from Secrets Manager
+                    DB_CREDS=$(aws secretsmanager get-secret-value \
+                        --secret-id "${SM_CREDENTIALS}" \
+                        --query SecretString \
+                        --output text)
+
+                    DB_ENDPOINT=$(aws secretsmanager get-secret-value \
+                        --secret-id "${SM_ENDPOINT}" \
+                        --query SecretString \
+                        --output text)
+
+                    # Parse individual fields from the JSON secrets
+                    DB_USER=$(echo "${DB_CREDS}" | python3 -c "import sys,json; print(json.load(sys.stdin)['username'])")
+                    DB_PASS=$(echo "${DB_CREDS}" | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+                    DB_NAME=$(echo "${DB_CREDS}" | python3 -c "import sys,json; print(json.load(sys.stdin)['dbname'])")
+                    DB_HOST=$(echo "${DB_ENDPOINT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['host'])")
+                    DB_PORT=$(echo "${DB_ENDPOINT}" | python3 -c "import sys,json; print(json.load(sys.stdin)['port'])")
+
+                    DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+                    REDIS_URL="redis://redis:6379/0"
+
+                    # Generate a Django SECRET_KEY if one is not already in K8s.
+                    # Check first so we don't rotate it on every deploy (rotating
+                    # SECRET_KEY invalidates all existing sessions and CSRF tokens).
+                    EXISTING_SECRET=$(kubectl get secret \
+                        "${PROJECT_NAME}-${ENVIRONMENT}-secret" \
+                        -n "${K8S_NAMESPACE}" \
+                        --ignore-not-found \
+                        -o jsonpath='{.data.SECRET_KEY}' 2>/dev/null || true)
+
+                    if [ -z "${EXISTING_SECRET}" ]; then
+                        DJANGO_SECRET_KEY=$(python3 -c "
+import secrets, string
+chars = string.ascii_letters + string.digits + '!@#%^&*(-_=+)'
+print(''.join(secrets.choice(chars) for _ in range(50)))
+")
+                    else
+                        DJANGO_SECRET_KEY=$(kubectl get secret \
+                            "${PROJECT_NAME}-${ENVIRONMENT}-secret" \
+                            -n "${K8S_NAMESPACE}" \
+                            -o jsonpath='{.data.SECRET_KEY}' | base64 --decode)
+                    fi
+
+                    # Create or update the Kubernetes Secret using --dry-run + apply
+                    # pattern — idempotent: works for both initial creation and
+                    # updates without risking data loss on conflict.
+                    kubectl create secret generic \
+                        "${PROJECT_NAME}-${ENVIRONMENT}-secret" \
+                        --from-literal=SECRET_KEY="${DJANGO_SECRET_KEY}" \
+                        --from-literal=DATABASE_URL="${DATABASE_URL}" \
+                        --from-literal=REDIS_URL="${REDIS_URL}" \
+                        --from-literal=DB_PASSWORD="${DB_PASS}" \
+                        --namespace="${K8S_NAMESPACE}" \
+                        --save-config \
+                        --dry-run=client \
+                        -o yaml \
+                    | kubectl apply -f -
+
+                    echo "Secrets injected into namespace ${K8S_NAMESPACE}"
+                '''
+            }
+        }
+
+        // ── Stage 9: Helm Upgrade ─────────────────────────────────────────────
+        stage('Helm Deploy') {
+            when {
+                branch 'main'
+            }
+            steps {
+                script {
+                    // Track whether deploy succeeded for rollback logic in post
+                    env.HELM_DEPLOYED = 'false'
+                }
+                sh '''
+                    helm upgrade "${HELM_RELEASE}" "${HELM_CHART}" \
+                        --namespace "${K8S_NAMESPACE}" \
+                        --create-namespace \
+                        --install \
+                        --atomic \
+                        --timeout "${HELM_TIMEOUT}" \
+                        --set image.repository="${ECR_REPO}" \
+                        --set image.tag="${IMAGE_TAG}" \
+                        --set global.environment="${ENVIRONMENT}" \
+                        --history-max 5
+
+                    # --atomic: if the upgrade fails (pods don't become healthy
+                    # within HELM_TIMEOUT), Helm automatically rolls back to the
+                    # previous release and exits non-zero, failing this stage.
+                    # This makes --atomic a built-in safety net — no explicit
+                    # rollback step is needed for Helm-detected failures.
+                '''
+                script {
+                    env.HELM_DEPLOYED = 'true'
+                }
+            }
+        }
+
+        // ── Stage 10: Deployment Verification ────────────────────────────────
+        stage('Verify Deployment') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                    echo "Waiting for deployment rollout to complete..."
+                    kubectl rollout status deployment/"${PROJECT_NAME}-${ENVIRONMENT}-app" \
+                        --namespace="${K8S_NAMESPACE}" \
+                        --timeout="${DEPLOY_TIMEOUT}s"
+
+                    echo "Checking pod health..."
+                    kubectl get pods \
+                        -n "${K8S_NAMESPACE}" \
+                        -l "component=app" \
+                        --field-selector=status.phase=Running
+
+                    RUNNING_PODS=$(kubectl get pods \
+                        -n "${K8S_NAMESPACE}" \
+                        -l "component=app" \
+                        --field-selector=status.phase=Running \
+                        --no-headers | wc -l)
+
+                    if [ "${RUNNING_PODS}" -lt 1 ]; then
+                        echo "ERROR: No running app pods found after deployment."
+                        exit 1
+                    fi
+
+                    echo "Deployment verified: ${RUNNING_PODS} pod(s) running."
+
+                    # Print the ALB/Ingress URL for easy access
+                    echo ""
+                    echo "Ingress:"
+                    kubectl get ingress \
+                        -n "${K8S_NAMESPACE}" \
+                        -o wide 2>/dev/null || true
+                '''
+            }
+        }
+    }
+
+    // ── Post-pipeline actions ─────────────────────────────────────────────────
+    post {
+        always {
+            sh '''
+                # Remove the locally built Docker image to free disk space.
+                # ECR keeps the authoritative copy; the local one is only needed
+                # during the build/scan/push stages of this run.
+                docker rmi "${IMAGE_FULL}" "${ECR_REPO}:latest" || true
+
+                # Clean up any dangling Docker layers from this build
+                docker image prune -f || true
+            '''
+            cleanWs()
+        }
+
+        success {
+            echo """
+            ╔══════════════════════════════════════════════════════════════╗
+            ║  Pipeline SUCCEEDED                                          ║
+            ║  Branch  : ${env.BRANCH_NAME}                                ║
+            ║  Build   : ${env.BUILD_NUMBER}                               ║
+            ║  Image   : ${env.IMAGE_FULL}                                 ║
+            ╚══════════════════════════════════════════════════════════════╝
+            """
+        }
+
+        failure {
+            sh '''
+                # Print recent pod events for debugging when deploy fails
+                kubectl get events \
+                    -n "${K8S_NAMESPACE}" \
+                    --sort-by='.lastTimestamp' \
+                    --field-selector type=Warning \
+                    2>/dev/null || true
+            '''
+            echo "Pipeline FAILED on branch ${env.BRANCH_NAME}, build ${env.BUILD_NUMBER}."
+        }
+
+        unstable {
+            echo "Pipeline UNSTABLE — check test results and SonarQube analysis."
+        }
+    }
+}

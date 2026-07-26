@@ -1,0 +1,30 @@
+# trivy.yaml
+# Trivy configuration — used when running `trivy image` locally or in CI.
+# Place this at the repo root so `trivy` picks it up automatically.
+# Overrides command-line defaults; explicit CLI flags still take precedence.
+
+severity:
+  - HIGH
+  - CRITICAL
+
+vulnerability:
+  ignore-unfixed: true
+
+scan:
+  scanners:
+    - vuln
+    - secret
+    - misconfig
+
+# Point to the .trivyignore file for accepted exceptions
+ignorefile: .trivyignore
+
+# Database — use GitHub Container Registry mirror for reliability
+db:
+  repository:
+    - ghcr.io/aquasecurity/trivy-db:2
+  java-repository:
+    - ghcr.io/aquasecurity/trivy-java-db:1
+
+# Output — table format in CI (Jenkins log), json when --output is specified
+format: table

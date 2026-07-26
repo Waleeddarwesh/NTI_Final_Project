@@ -1,0 +1,41 @@
+---
+{{- if .Values.redis.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ include "myapp.namespace" . }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    component: redis
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "myapp.redisSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+{{- end }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "myapp.fullname" . }}-app
+  namespace: {{ include "myapp.namespace" . }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    component: app
+  annotations:
+    alb.ingress.kubernetes.io/target-type: {{ .Values.ingress.targetType }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "myapp.appSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP

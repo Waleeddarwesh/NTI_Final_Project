@@ -1,0 +1,30 @@
+---
+# roles/java/tasks/main.yml
+# Install Amazon Corretto 21 (OpenJDK distribution from AWS).
+# Jenkins 2.555.x requires Java 21 — Java 17 support was dropped in 2.555.1.
+
+- name: Install Amazon Corretto 21 (headless)
+  ansible.builtin.dnf:
+    name: "{{ java_package }}"
+    state: present
+  tags: java
+
+- name: Verify Java version
+  ansible.builtin.command: java -version
+  register: java_version_output
+  changed_when: false
+  tags: java
+
+- name: Display Java version
+  ansible.builtin.debug:
+    msg: "{{ java_version_output.stderr }}"
+  tags: java
+
+- name: Set JAVA_HOME in /etc/environment
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: '^JAVA_HOME='
+    line: 'JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto'
+    create: true
+    mode: '0644'
+  tags: java

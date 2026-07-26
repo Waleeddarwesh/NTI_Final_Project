@@ -1,0 +1,47 @@
+---
+# docker-compose.test.yml
+# Compose override for CI test runs. Merge on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml ...
+#
+# Changes from the dev compose:
+#   - App uses test settings (in-memory caches, test DB)
+#   - No volume mounts for staticfiles/media (not needed for tests)
+#   - No Nginx (not needed for unit tests)
+#   - Postgres uses a separate test database to avoid polluting dev DB
+#   - All services are ephemeral (no named volumes persisted)
+
+version: "3.9"
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpassword
+    # Use tmpfs for speed — test data is not persisted between runs
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  redis:
+    # tmpfs for test Redis — no persistence needed
+    tmpfs:
+      - /data
+
+  app:
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DATABASE_URL: postgres://testuser:testpassword@postgres:5432/testdb
+      REDIS_URL: redis://redis:6379/1
+      SECRET_KEY: test-only-secret-key-not-used-in-production
+      DEBUG: "True"
+    # Override entrypoint — run tests directly, skip collectstatic/gunicorn
+    entrypoint: []
+    command: []
+    # No health check for test container — it exits when tests complete
+    healthcheck:
+      disable: true
+
+  # Nginx not needed for tests — remove it from the test stack
+  nginx:
+    profiles:
+      - donotstart

@@ -1,0 +1,141 @@
+---
+# roles/jenkins/tasks/main.yml
+# Install and configure Jenkins LTS on Amazon Linux 2023.
+# Depends on: java role (must run first), docker role (jenkins user added to docker group)
+
+# ── Repository & Package ──────────────────────────────────────────────────────
+
+- name: Import Jenkins repository GPG key (2026 key, required for LTS 2.541.1+)
+  ansible.builtin.rpm_key:
+    key: "{{ jenkins_repo_key_url }}"
+    state: present
+  tags: jenkins
+
+- name: Add Jenkins stable (LTS) yum repository
+  ansible.builtin.get_url:
+    url: "{{ jenkins_repo_url }}"
+    dest: /etc/yum.repos.d/jenkins.repo
+    mode: '0644'
+  tags: jenkins
+
+- name: Install Jenkins
+  ansible.builtin.dnf:
+    name: "jenkins-{{ jenkins_version }}"
+    state: present
+    update_cache: true
+  notify: Restart Jenkins
+  tags: jenkins
+
+# ── Java / JVM options for Jenkins service ────────────────────────────────────
+
+- name: Configure Jenkins JVM options in systemd override
+  ansible.builtin.file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    mode: '0755'
+  tags: jenkins
+
+- name: Write Jenkins systemd override with JAVA_OPTS
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
+    content: |
+      [Service]
+      Environment="JAVA_OPTS={{ jenkins_java_options }}"
+      Environment="JENKINS_PORT={{ jenkins_http_port }}"
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart Jenkins
+  tags: jenkins
+
+# ── Service ───────────────────────────────────────────────────────────────────
+
+- name: Enable and start Jenkins service
+  ansible.builtin.systemd:
+    name: jenkins
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: jenkins
+
+- name: Wait for Jenkins to be fully started (up to 3 minutes)
+  ansible.builtin.uri:
+    url: "http://localhost:{{ jenkins_http_port }}/login"
+    status_code: 200
+  register: jenkins_login
+  retries: 18
+  delay: 10
+  until: jenkins_login.status == 200
+  tags: jenkins
+
+# ── Initial admin password ────────────────────────────────────────────────────
+
+- name: Read Jenkins initial admin password
+  ansible.builtin.slurp:
+    src: "{{ jenkins_home }}/secrets/initialAdminPassword"
+  register: jenkins_initial_password
+  tags: jenkins
+
+- name: Display Jenkins initial admin password
+  ansible.builtin.debug:
+    msg: |
+      ============================================================
+      Jenkins is running at: http://{{ ansible_host }}:{{ jenkins_http_port }}
+      Initial admin password: {{ jenkins_initial_password.content | b64decode | trim }}
+      Save this — you will need it to complete setup at first login.
+      ============================================================
+  tags: jenkins
+
+# ── Plugin installation via Jenkins CLI ──────────────────────────────────────
+
+- name: Download Jenkins CLI jar
+  ansible.builtin.get_url:
+    url: "http://localhost:{{ jenkins_http_port }}/jnlpJars/jenkins-cli.jar"
+    dest: /tmp/jenkins-cli.jar
+    mode: '0644'
+  retries: 5
+  delay: 15
+  tags: jenkins,plugins
+
+- name: Install Jenkins plugins via CLI
+  # install-plugin exits 0 if already installed and at latest version,
+  # so this is safe to re-run (idempotent at the plugin-manager level).
+  ansible.builtin.command: >
+    java -jar /tmp/jenkins-cli.jar
+    -s http://localhost:{{ jenkins_http_port }}/
+    -auth admin:{{ jenkins_initial_password.content | b64decode | trim }}
+    install-plugin {{ item }} -deploy
+  loop: "{{ jenkins_plugins }}"
+  register: plugin_install
+  changed_when: "'Installing' in plugin_install.stdout"
+  notify: Restart Jenkins
+  tags: jenkins,plugins
+
+- name: Wait for Jenkins to restart after plugin installation
+  ansible.builtin.uri:
+    url: "http://localhost:{{ jenkins_http_port }}/login"
+    status_code: 200
+  register: jenkins_ready_after_plugins
+  retries: 18
+  delay: 10
+  until: jenkins_ready_after_plugins.status == 200
+  tags: jenkins,plugins
+
+# ── Jenkins home directory permissions ───────────────────────────────────────
+
+- name: Ensure jenkins user owns its home directory
+  ansible.builtin.file:
+    path: "{{ jenkins_home }}"
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    recurse: true
+  tags: jenkins
+
+- name: Ensure .kube directory exists for jenkins user
+  ansible.builtin.file:
+    path: "{{ jenkins_home }}/.kube"
+    state: directory
+    owner: "{{ jenkins_user }}"
+    group: "{{ jenkins_group }}"
+    mode: '0700'
+  tags: jenkins

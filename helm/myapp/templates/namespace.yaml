@@ -1,0 +1,26 @@
+{{- if .Values.namespace.create }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace.name }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+---
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "myapp.fullname" . }}-quota
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+spec:
+  hard:
+    requests.cpu: {{ .Values.resourceQuota.requestsCpu | quote }}
+    requests.memory: {{ .Values.resourceQuota.requestsMemory | quote }}
+    limits.cpu: {{ .Values.resourceQuota.limitsCpu | quote }}
+    limits.memory: {{ .Values.resourceQuota.limitsMemory | quote }}
+    pods: {{ .Values.resourceQuota.pods | quote }}
+{{- end }}
+{{- end }}

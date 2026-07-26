@@ -1,0 +1,234 @@
+---
+# monitoring/alerts/nti-devops-rules.yaml
+# Custom PrometheusRule for the nti-devops application.
+# Applied as a Kubernetes resource — Prometheus Operator picks it up
+# automatically because ruleSelectorNilUsesHelmValues: false in the
+# kube-prometheus-stack values (it watches all namespaces for rules).
+#
+# Apply: kubectl apply -f monitoring/alerts/nti-devops-rules.yaml
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nti-devops-rules
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    release: kube-prometheus-stack   # required: operator uses this label to discover rules
+spec:
+  groups:
+
+    # ── Application availability ──────────────────────────────────────────────
+    - name: nti-devops.availability
+      interval: 30s
+      rules:
+
+        - alert: AppPodsUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="nti-devops",
+              deployment=~".*-app"
+            } < 1
+          for: 2m
+          labels:
+            severity: critical
+            namespace: nti-devops
+          annotations:
+            summary: "No available app pods in nti-devops"
+            description: >
+              Deployment {{ $labels.deployment }} has 0 available replicas for 2 minutes.
+              All application traffic is failing.
+            runbook_url: "https://github.com/your-org/nti-devops/wiki/runbooks/app-unavailable"
+
+        - alert: AppPodRestartingFrequently
+          expr: |
+            increase(
+              kube_pod_container_status_restarts_total{
+                namespace="nti-devops",
+                container="app"
+              }[15m]
+            ) > 3
+          for: 0m
+          labels:
+            severity: warning
+            namespace: nti-devops
+          annotations:
+            summary: "App pod restarting frequently"
+            description: >
+              Pod {{ $labels.pod }} container {{ $labels.container }} has restarted
+              {{ $value | printf "%.0f" }} times in the last 15 minutes.
+              Likely a crash loop or OOMKill.
+
+        - alert: AppDeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas{namespace="nti-devops"}
+              !=
+            kube_deployment_status_replicas_available{namespace="nti-devops"}
+          for: 10m
+          labels:
+            severity: warning
+            namespace: nti-devops
+          annotations:
+            summary: "Deployment replica count mismatch"
+            description: >
+              Deployment {{ $labels.deployment }} has been below its desired replica
+              count for 10 minutes. Desired: {{ $value }}.
+
+    # ── Resource utilisation ──────────────────────────────────────────────────
+    - name: nti-devops.resources
+      interval: 60s
+      rules:
+
+        - alert: AppHighCPU
+          expr: |
+            sum(
+              rate(container_cpu_usage_seconds_total{
+                namespace="nti-devops",
+                container="app"
+              }[5m])
+            ) by (pod)
+              /
+            sum(
+              kube_pod_container_resource_limits{
+                namespace="nti-devops",
+                container="app",
+                resource="cpu"
+              }
+            ) by (pod)
+            > 0.85
+          for: 5m
+          labels:
+            severity: warning
+            namespace: nti-devops
+          annotations:
+            summary: "App pod CPU usage above 85%"
+            description: >
+              Pod {{ $labels.pod }} CPU usage is {{ $value | humanizePercentage }}
+              of its limit for 5 minutes. HPA should scale up — check if max replicas
+              has been reached.
+
+        - alert: AppHighMemory
+          expr: |
+            sum(
+              container_memory_working_set_bytes{
+                namespace="nti-devops",
+                container="app"
+              }
+            ) by (pod)
+              /
+            sum(
+              kube_pod_container_resource_limits{
+                namespace="nti-devops",
+                container="app",
+                resource="memory"
+              }
+            ) by (pod)
+            > 0.90
+          for: 5m
+          labels:
+            severity: warning
+            namespace: nti-devops
+          annotations:
+            summary: "App pod memory usage above 90%"
+            description: >
+              Pod {{ $labels.pod }} memory is at {{ $value | humanizePercentage }}
+              of its limit. OOMKill imminent if this is sustained.
+
+        - alert: AppPodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{
+              namespace="nti-devops",
+              container="app",
+              reason="OOMKilled"
+            } == 1
+          for: 0m
+          labels:
+            severity: critical
+            namespace: nti-devops
+          annotations:
+            summary: "App pod killed by OOM"
+            description: >
+              Pod {{ $labels.pod }} was OOMKilled. Increase memory limits in
+              values.yaml or investigate memory leak.
+
+    # ── Node health ───────────────────────────────────────────────────────────
+    - name: nti-devops.nodes
+      interval: 60s
+      rules:
+
+        - alert: NodeHighDiskUsage
+          expr: |
+            (
+              node_filesystem_size_bytes{mountpoint="/", fstype!="tmpfs"}
+              - node_filesystem_free_bytes{mountpoint="/", fstype!="tmpfs"}
+            )
+            / node_filesystem_size_bytes{mountpoint="/", fstype!="tmpfs"}
+            > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node disk usage above 85%"
+            description: >
+              Node {{ $labels.instance }} root filesystem is
+              {{ $value | humanizePercentage }} full.
+              Jenkins workspace and Docker layer accumulation is the most
+              likely cause on the Jenkins host.
+
+        - alert: NodeHighMemoryUsage
+          expr: |
+            (
+              1 - (
+                node_memory_MemAvailable_bytes
+                / node_memory_MemTotal_bytes
+              )
+            ) > 0.90
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Node memory usage above 90%"
+            description: >
+              Node {{ $labels.instance }} memory usage is
+              {{ $value | humanizePercentage }}.
+
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    - name: nti-devops.redis
+      interval: 30s
+      rules:
+
+        - alert: RedisPodUnavailable
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="nti-devops",
+              deployment=~".*redis"
+            } < 1
+          for: 1m
+          labels:
+            severity: critical
+            namespace: nti-devops
+          annotations:
+            summary: "Redis pod unavailable"
+            description: >
+              Redis deployment in nti-devops has 0 available replicas.
+              Application cache and session storage are unavailable.
+
+    # ── Persistent Volume ─────────────────────────────────────────────────────
+    - name: nti-devops.storage
+      interval: 60s
+      rules:
+
+        - alert: PVCNearFull
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="monitoring"}
+              / kubelet_volume_stats_capacity_bytes{namespace="monitoring"}
+            > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC in monitoring namespace near full"
+            description: >
+              PVC {{ $labels.persistentvolumeclaim }} is
+              {{ $value | humanizePercentage }} full.
+              Prometheus/Grafana data may be at risk.

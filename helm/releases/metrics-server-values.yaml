@@ -1,0 +1,32 @@
+# helm/releases/metrics-server-values.yaml
+# Values for: helm install metrics-server metrics-server/metrics-server
+#             -n kube-system --values helm/releases/metrics-server-values.yaml
+#
+# metrics-server is required by the HPA from Phase 4.
+# Install before applying Phase 4 manifests or the HPA will report
+# "unknown" metrics indefinitely.
+
+replicas: 2    # HA — one per AZ on a 2-node cluster
+
+args:
+  - --cert-dir=/tmp
+  - --secure-port=10250
+  - --kubelet-preferred-address-types=InternalIP
+  - --kubelet-use-node-status-port
+  - --metric-resolution=30s
+  # Required on EKS because kubelet certificates are not signed by the
+  # cluster CA — without this flag metrics-server fails TLS verification
+  # against kubelets and returns no metrics.
+  - --kubelet-insecure-tls
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 200Mi
+  limits:
+    cpu: 500m
+    memory: 500Mi
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

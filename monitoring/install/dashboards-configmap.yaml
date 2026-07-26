@@ -1,0 +1,35 @@
+---
+# monitoring/install/dashboards-configmap.yaml
+# Deploys the custom Grafana dashboard JSON files as a ConfigMap in the
+# monitoring namespace. The Grafana sidecar (enabled in the kube-prometheus-stack
+# values with sidecar.dashboards.enabled=true) watches ConfigMaps with the
+# label grafana_dashboard="1" and automatically loads them into Grafana —
+# no manual import required.
+#
+# Apply: kubectl apply -f monitoring/install/dashboards-configmap.yaml
+# Or use the install script: monitoring/install/install.sh
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nti-devops-dashboards
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app: nti-devops
+    component: monitoring
+data:
+  # Dashboard JSON is referenced by filename; Grafana loads all keys ending
+  # in .json. The content is the raw Grafana dashboard JSON from
+  # monitoring/dashboards/nti-devops-application.json —
+  # embed it here or use a Helm chart / kustomize to template the configmap.
+  #
+  # For a production GitOps setup, use Grafana's provisioning or
+  # grafana-operator CRDs instead of manually embedding JSON here.
+  nti-devops-application.json: |
+    DASHBOARD_JSON_PLACEHOLDER
+    # Replace DASHBOARD_JSON_PLACEHOLDER with the contents of:
+    # monitoring/dashboards/nti-devops-application.json
+    #
+    # Or use the install script which does this automatically:
+    # monitoring/install/install.sh

@@ -1,0 +1,194 @@
+Phase 1 — Terraform (AWS Infrastructure)
+
+We'll build:
+
+terraform/
+├── backend.tf
+├── provider.tf
+├── variables.tf
+├── outputs.tf
+├── terraform.tfvars
+├── main.tf
+│
+├── modules/
+│   ├── vpc/
+│   ├── security-groups/
+│   ├── iam/
+│   ├── eks/
+│   ├── ecr/
+│   ├── rds/
+│   ├── secrets-manager/
+│   ├── ec2-jenkins/
+│   ├── backup/
+│   ├── s3/
+│   └── alb-logs/
+
+We'll implement:
+
+VPC
+Public & Private Subnets
+Internet Gateway
+NAT Gateway
+Route Tables
+Security Groups
+IAM Roles
+EKS Cluster
+Node Group
+Auto Scaling
+Jenkins EC2
+RDS
+Secrets Manager
+ECR
+AWS Backup
+S3 for ALB logs
+Phase 2 — Ansible
+ansible/
+
+inventory/
+
+roles/
+
+    docker/
+
+    java/
+
+    git/
+
+    jenkins/
+
+    cloudwatch/
+
+playbooks/
+
+We'll automate:
+
+Jenkins installation
+Docker
+Git
+Java
+Jenkins plugins
+AWS CLI
+kubectl
+Helm
+CloudWatch Agent
+Phase 3 — Docker
+Dockerfile
+
+docker-compose.yml
+
+nginx/
+
+entrypoint.sh
+
+Application stack:
+
+Django
+PostgreSQL
+Redis
+Nginx
+Gunicorn
+Phase 4 — Kubernetes
+k8s/
+
+namespace.yaml
+
+deployment.yaml
+
+service.yaml
+
+ingress.yaml
+
+configmap.yaml
+
+secret.yaml
+
+networkpolicy.yaml
+
+horizontalpodautoscaler.yaml
+Phase 5 — Helm
+helm/
+
+myapp/
+
+Chart.yaml
+
+values.yaml
+
+templates/
+Phase 6 — Jenkins
+
+Create a production Jenkinsfile:
+
+Checkout
+
+↓
+
+Unit Tests
+
+↓
+
+SonarQube
+
+↓
+
+Quality Gate
+
+↓
+
+Docker Build
+
+↓
+
+Trivy Scan
+
+↓
+
+Push ECR
+
+↓
+
+Helm Upgrade
+
+↓
+
+Deployment Verification
+Phase 7 — Monitoring
+
+Deploy
+
+Prometheus
+Grafana
+Alertmanager
+Node Exporter
+kube-state-metrics
+
+Create dashboards
+
+Create alerts
+
+Phase 8 — Documentation
+
+We'll produce
+
+README.md
+Architecture Diagram
+Deployment Guide
+Troubleshooting Guide
+What you'll have at the end
+
+A GitHub repository like:
+
+nti-devops-final-project/
+
+├── terraform/
+├── ansible/
+├── docker/
+├── kubernetes/
+├── helm/
+├── jenkins/
+├── monitoring/
+├── docs/
+├── Jenkinsfile
+├── docker-compose.yml
+├── README.md
+└── architecture.png

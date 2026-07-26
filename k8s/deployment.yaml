@@ -1,0 +1,223 @@
+---
+# k8s/deployment.yaml
+# Application Deployment (Django/Gunicorn) and Redis Deployment.
+# Redis runs inside the cluster for this project scope — ElastiCache
+# would be the production-grade alternative but adds cost and complexity
+# beyond what a final project requires.
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nti-devops
+      component: redis
+  template:
+    metadata:
+      labels:
+        app: nti-devops
+        component: redis
+    spec:
+      # Security hardening — run as non-root, read-only root filesystem
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - allkeys-lru
+            - --save
+            - ""          # Disable persistence in-cluster (RDS is the source of truth)
+          ports:
+            - containerPort: 6379
+              name: redis
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: redis-tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: redis-tmp
+          emptyDir: {}
+
+---
+# ── Application (Django/Gunicorn) ─────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nti-devops-app
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: app
+  annotations:
+    # Causes kubectl rollout to track this field — changing it triggers
+    # a rolling update even if the image tag hasn't changed (e.g. same
+    # tag but new configmap values).
+    configmap-version: "1"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nti-devops
+      component: app
+  # Rolling update: never go below 1 available pod during a deploy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nti-devops
+        component: app
+    spec:
+      # Match UID/GID created in the Dockerfile (appuser:appgroup = 1000:1000)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      # Allow 30s for Gunicorn to finish in-flight requests before SIGKILL
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: app
+          # Image is updated by the Jenkinsfile at deploy time:
+          #   kubectl set image deployment/nti-devops-app app=<ecr-url>:<tag>
+          image: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/nti-devops/app:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+
+          # Load non-secret config from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: nti-devops-config
+
+          # Load secret values from Secret
+          env:
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: nti-devops-secret
+                  key: SECRET_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nti-devops-secret
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: nti-devops-secret
+                  key: REDIS_URL
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+          # Startup probe: gives the container up to 3 minutes to pass its
+          # first health check (migrations + collectstatic can take 30-60s
+          # on a cold start). Only after this passes do liveness/readiness
+          # probes begin — prevents premature restarts during cold starts.
+          startupProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            failureThreshold: 18    # 18 × 10s = 3 minutes
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            initialDelaySeconds: 0
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health/
+              port: 8000
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            - name: staticfiles
+              mountPath: /app/staticfiles
+            - name: mediafiles
+              mountPath: /app/media
+            # /dev/shm required by Gunicorn --worker-tmp-dir (set in entrypoint.sh)
+            - name: shm
+              mountPath: /dev/shm
+            # /tmp writable scratch space (readOnlyRootFilesystem = true
+            # blocks writes to / so explicit /tmp mount is needed)
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: staticfiles
+          emptyDir: {}
+        - name: mediafiles
+          emptyDir: {}      # Phase 5+ upgrade: replace with PVC backed by EFS/S3
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir: {}

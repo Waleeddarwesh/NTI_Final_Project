@@ -1,0 +1,22 @@
+apiVersion: v2
+name: myapp
+description: >
+  NTI DevOps Final Project — Django/Gunicorn application chart.
+  Packages the application Deployment, Redis Deployment, Services,
+  Ingress, ConfigMap, Secret template, NetworkPolicies, and HPA.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+keywords:
+  - django
+  - python
+  - nti-devops
+
+maintainers:
+  - name: nti-devops-team
+
+# No chart dependencies — the AWS Load Balancer Controller and
+# metrics-server are installed separately as cluster-level add-ons
+# (see helm/releases/ scripts) because they live in kube-system and
+# are shared across all namespaces, not scoped to this chart.

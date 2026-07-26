@@ -1,0 +1,43 @@
+---
+jenkins_version: "2.555.3"
+jenkins_http_port: 8080
+jenkins_home: /var/lib/jenkins
+jenkins_user: jenkins
+jenkins_group: jenkins
+jenkins_java_options: >-
+  -Djava.awt.headless=true
+  -Xms512m
+  -Xmx2g
+  -XX:+UseG1GC
+  -XX:MaxGCPauseMillis=200
+  -Djenkins.install.runSetupWizard=false
+
+# Core pipeline and integration plugins required by the Jenkinsfile in Phase 6.
+# Versions are omitted deliberately — Jenkins plugin manager installs the
+# latest compatible version for the running Jenkins core. Pinning plugin versions
+# in Ansible creates maintenance burden without meaningful stability benefit,
+# since Jenkins's own update center handles compatibility validation.
+jenkins_plugins:
+  - git
+  - workflow-aggregator          # Pipeline (Declarative + Scripted)
+  - pipeline-stage-view
+  - blueocean
+  - docker-workflow              # Docker pipeline steps (docker.build, docker.push)
+  - docker-plugin
+  - kubernetes                   # Kubernetes cloud agents (optional but useful)
+  - sonar                        # SonarQube integration
+  - sonar-quality-gates
+  - aws-credentials              # AWS credentials binding
+  - amazon-ecr                   # ECR credential helper for Docker push
+  - credentials-binding          # withCredentials() step
+  - ssh-credentials
+  - github                       # GitHub webhook trigger
+  - github-branch-source
+  - antisamy-markup-formatter
+  - timestamper
+  - ws-cleanup
+  - build-timeout
+  - matrix-auth
+  - role-strategy
+  - email-ext
+  - mailer

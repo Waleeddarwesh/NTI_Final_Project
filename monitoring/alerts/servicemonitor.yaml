@@ -1,0 +1,57 @@
+---
+# monitoring/alerts/servicemonitor.yaml
+# ServiceMonitor resources tell Prometheus Operator which services to scrape.
+# The Django app must expose /metrics via django-prometheus (add to INSTALLED_APPS
+# and include path('', include('django_prometheus.urls')) in urls.py).
+#
+# Apply: kubectl apply -f monitoring/alerts/servicemonitor.yaml
+
+# ── Django Application ServiceMonitor ─────────────────────────────────────────
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nti-devops-app
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nti-devops
+      component: app
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - nti-devops
+
+---
+# ── Redis ServiceMonitor ───────────────────────────────────────────────────────
+# Redis itself doesn't expose Prometheus metrics natively — requires
+# redis_exporter as a sidecar. For a simpler setup, the kube-prometheus-stack
+# default rules cover Redis via the container resource metrics that
+# kube-state-metrics already collects (CPU/memory/restart counts).
+# Uncomment the block below if redis_exporter is added as a sidecar:
+#
+# apiVersion: monitoring.coreos.com/v1
+# kind: ServiceMonitor
+# metadata:
+#   name: nti-devops-redis
+#   namespace: nti-devops
+#   labels:
+#     release: kube-prometheus-stack
+# spec:
+#   selector:
+#     matchLabels:
+#       component: redis
+#   endpoints:
+#     - port: redis-metrics
+#       path: /metrics
+#       interval: 30s
+#   namespaceSelector:
+#     matchNames:
+#       - nti-devops

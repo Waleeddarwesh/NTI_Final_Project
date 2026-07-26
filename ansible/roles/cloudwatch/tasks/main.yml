@@ -1,0 +1,52 @@
+---
+# roles/cloudwatch/tasks/main.yml
+# Install and configure the AWS CloudWatch Agent.
+# The agent ships Jenkins logs and host metrics to CloudWatch, which the
+# monitoring stack in Phase 7 will pull alongside Prometheus.
+# The IAM permissions for log/metric writes were granted by the Jenkins
+# IAM role (CloudWatchAgentServerPolicy) in Phase 1, Part 2.
+
+- name: Install CloudWatch Agent via dnf (AL2023 has it in default repos)
+  ansible.builtin.dnf:
+    name: amazon-cloudwatch-agent
+    state: present
+  tags: cloudwatch
+
+- name: Deploy CloudWatch Agent configuration
+  ansible.builtin.template:
+    src: amazon-cloudwatch-agent.json.j2
+    dest: "{{ cloudwatch_agent_config }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart CloudWatch Agent
+  tags: cloudwatch
+
+- name: Enable and start CloudWatch Agent
+  ansible.builtin.systemd:
+    name: amazon-cloudwatch-agent
+    enabled: true
+    state: started
+  tags: cloudwatch
+
+- name: Start CloudWatch Agent with configuration file
+  ansible.builtin.command: >
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl
+    -a fetch-config
+    -m ec2
+    -s
+    -c file:{{ cloudwatch_agent_config }}
+  changed_when: true
+  notify: Restart CloudWatch Agent
+  tags: cloudwatch
+
+- name: Verify CloudWatch Agent is running
+  ansible.builtin.systemd:
+    name: amazon-cloudwatch-agent
+  register: cw_status
+  tags: cloudwatch
+
+- name: Display CloudWatch Agent status
+  ansible.builtin.debug:
+    msg: "CloudWatch Agent status: {{ cw_status.status.ActiveState }}"
+  tags: cloudwatch

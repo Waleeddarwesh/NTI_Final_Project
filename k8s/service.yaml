@@ -1,0 +1,52 @@
+---
+# k8s/service.yaml
+# Services expose Deployments inside the cluster.
+# The app Service is ClusterIP — external traffic comes through the Ingress
+# (Phase 4) which the ALB Ingress Controller (Phase 5, Helm) handles.
+
+# ── Redis Service ─────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: nti-devops
+    component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+
+---
+# ── Application Service ───────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: nti-devops-app
+  namespace: nti-devops
+  labels:
+    app: nti-devops
+    component: app
+  annotations:
+    # Tells the AWS Load Balancer Controller (installed in Phase 5) that
+    # this service's pods should be registered as ALB targets directly
+    # (IP mode) rather than routing through NodePort — more efficient and
+    # avoids double-hop latency.
+    alb.ingress.kubernetes.io/target-type: ip
+spec:
+  type: ClusterIP
+  selector:
+    app: nti-devops
+    component: app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP

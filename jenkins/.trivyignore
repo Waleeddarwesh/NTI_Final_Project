@@ -1,0 +1,16 @@
+# .trivyignore
+# CVEs accepted and excluded from Trivy scan failure.
+# Format: one CVE ID per line, with optional expiry date and comment.
+#
+# Before accepting a CVE, document:
+#   1. WHY it is not exploitable in this context
+#   2. An expiry date — reviewed CVEs should be re-evaluated regularly
+#   3. The ticket/issue tracking the decision
+#
+# Example:
+#   # CVE-2023-XXXXX: Affects feature X which we don't use (TICKET-123)
+#   # exp:2026-12-31
+#   CVE-2023-XXXXX
+#
+# Current accepted exceptions: none
+# All HIGH and CRITICAL findings must be fixed or explicitly accepted here.

@@ -1,0 +1,63 @@
+---
+# roles/helm/tasks/main.yml
+# Install Helm 3 from the official binary tarball.
+
+- name: Check if Helm is already installed at correct version
+  ansible.builtin.command: helm version --short
+  register: helm_installed
+  changed_when: false
+  failed_when: false
+  tags: helm
+
+- name: Download Helm tarball
+  ansible.builtin.get_url:
+    url: "{{ helm_url }}"
+    dest: /tmp/helm.tar.gz
+    mode: '0644'
+  when: >
+    helm_installed.rc != 0 or
+    helm_version not in helm_installed.stdout
+  tags: helm
+
+- name: Extract Helm binary
+  ansible.builtin.unarchive:
+    src: /tmp/helm.tar.gz
+    dest: /tmp/
+    remote_src: true
+  when: >
+    helm_installed.rc != 0 or
+    helm_version not in helm_installed.stdout
+  tags: helm
+
+- name: Install Helm binary to /usr/local/bin
+  ansible.builtin.copy:
+    src: /tmp/linux-amd64/helm
+    dest: /usr/local/bin/helm
+    remote_src: true
+    mode: '0755'
+    owner: root
+    group: root
+  when: >
+    helm_installed.rc != 0 or
+    helm_version not in helm_installed.stdout
+  tags: helm
+
+- name: Clean up Helm installer files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/helm.tar.gz
+    - /tmp/linux-amd64
+  tags: helm
+
+- name: Verify Helm version
+  ansible.builtin.command: helm version --short
+  register: helm_version_check
+  changed_when: false
+  tags: helm
+
+- name: Display Helm version
+  ansible.builtin.debug:
+    msg: "{{ helm_version_check.stdout }}"
+  tags: helm

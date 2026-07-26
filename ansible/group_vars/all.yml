@@ -1,0 +1,44 @@
+---
+# group_vars/all.yml
+# Variables available to every role and playbook.
+# Role-specific defaults live in roles/<role>/defaults/main.yml — override
+# them here or in host_vars if you need per-host values.
+
+# ── Project identity ──────────────────────────────────────────────────────────
+project_name: nti-devops
+environment: dev
+aws_region: us-east-1          # must match terraform.tfvars
+
+# ── EKS ───────────────────────────────────────────────────────────────────────
+# Populated at runtime from /etc/nti-devops/env (written by Terraform user-data)
+# or override here for local testing.
+eks_cluster_name: "{{ project_name }}-{{ environment }}-eks"
+
+# ── Tool versions ─────────────────────────────────────────────────────────────
+# Java
+java_package: java-21-amazon-corretto-headless   # Jenkins 2.555.x requires Java 21
+
+# Jenkins
+jenkins_version: "2.555.3"                        # current LTS as of July 2026
+jenkins_repo_key_url: "https://pkg.jenkins.io/rpm-stable/jenkins.io-2026.key"
+jenkins_repo_url: "https://pkg.jenkins.io/rpm-stable/jenkins.repo"
+
+# kubectl — use the AWS EKS-vended binary matching the cluster version (1.34.x)
+kubectl_version: "1.34.6"
+kubectl_release_date: "2026-04-08"
+kubectl_url: "https://s3.us-west-2.amazonaws.com/amazon-eks/{{ kubectl_version }}/{{ kubectl_release_date }}/bin/linux/amd64/kubectl"
+
+# Helm
+helm_version: "v3.17.0"
+helm_url: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+
+# AWS CLI v2 (always install latest stable — it's a self-updating zip install)
+awscli_url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+
+# ── Jenkins service account ───────────────────────────────────────────────────
+jenkins_user: jenkins
+jenkins_group: jenkins
+jenkins_home: /var/lib/jenkins
+
+# ── CloudWatch Agent ─────────────────────────────────────────────────────────
+cloudwatch_agent_config: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json

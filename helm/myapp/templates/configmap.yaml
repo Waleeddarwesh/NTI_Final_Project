@@ -1,0 +1,22 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "myapp.fullname" . }}-config
+  namespace: {{ include "myapp.namespace" . }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+data:
+  DJANGO_SETTINGS_MODULE: {{ .Values.config.djangoSettingsModule | quote }}
+  DEBUG: {{ .Values.config.debug | quote }}
+  ALLOWED_HOSTS: {{ .Values.config.allowedHosts | quote }}
+  DJANGO_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  AWS_REGION: {{ .Values.config.awsRegion | quote }}
+  REDIS_HOST: {{ .Values.config.redisHost | quote }}
+  REDIS_PORT: {{ .Values.config.redisPort | quote }}
+  DB_PORT: {{ .Values.config.dbPort | quote }}
+  DB_NAME: {{ .Values.config.dbName | quote }}
+  DB_USER: {{ .Values.config.dbUser | quote }}
+  GUNICORN_WORKERS: {{ .Values.config.gunicornWorkers | quote }}
+  GUNICORN_THREADS: {{ .Values.config.gunicornThreads | quote }}
+  GUNICORN_TIMEOUT: {{ .Values.config.gunicornTimeout | quote }}
